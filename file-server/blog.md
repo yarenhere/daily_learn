@@ -9,10 +9,11 @@ p2p下载有很多种，简单的一种就是文件下好后，整个文件提�
 
 文件的分片下载主要是使用http请求中header指定range范围获取文件的指定内容。
 使用nginx托管目录来做的服务器就支持下载请求指定文件的范围。
-我们现在的服务就是将下载后的文件目录交给nginx托管，然后作为源种子提供给客户端作为初始分片去下载所需要的部分。
+我们现在的服务就是阿里开源的[Dragonfly][1]
+其中的supernode及管理客户端下载分片且作为源站的超级节点，是将下载后的文件目录交给nginx托管，然后作为源种子提供给客户端作为初始分片去下载所需要的部分。
 使用中nginx跟我们的服务是分离的，上线前需要在机器上配置启动nginx，还有些其他问题，因此考虑自身的服务实现一个文件下载服务器，减少额外依赖。
 
-整体功能也比较简单主要就是，可以看https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Range_requests
+整体功能也比较简单主要就是，可以看[HTTP请求范围][2]
 1. 返回头中需要标记Accept-Range: bytes表明该服务器支持指定请求范围
 2. 支持解析请求中的Range:bytes=0-100来指定获取的文件范围
 3. 支持返回码206 416等分片下载中需要返回码
@@ -22,20 +23,20 @@ p2p下载有很多种，简单的一种就是文件下好后，整个文件提�
 获取请求头是否有Range，有的话解析获取范围，从而去读取文件的该部分内容
 ```
 func getRange(bytesRange string) (start, end int64, err error) {
-	ranges := strings.Split(strings.Trim(bytesRange, "bytes="), "-")
-	if len(ranges) != 2 {
-		err = fmt.Errorf("wrong %s:%s", HeaderRange, bytesRange)
-		return
-	}
-	start, err = strconv.ParseInt(ranges[0], 10, 64)
-	if err != nil {
-		return
-	}
-	end, err = strconv.ParseInt(ranges[1], 10, 64)
-	if err != nil {
-		return
-	}
-	return
+    ranges := strings.Split(strings.Trim(bytesRange, "bytes="), "-")
+    if len(ranges) != 2 {
+        err = fmt.Errorf("wrong %s:%s", HeaderRange, bytesRange)
+        return
+    }
+    start, err = strconv.ParseInt(ranges[0], 10, 64)
+    if err != nil {
+        return
+    }
+    end, err = strconv.ParseInt(ranges[1], 10, 64)
+    if err != nil {
+        return
+    }
+    return
 }
 ```
 获取后简单判断下，如果请求范围起始值超过文件结束值，返回个416表示超过范围了，否则返回206表示为文件的分片同时范围该部分内容
@@ -61,36 +62,36 @@ if start > fileSize {
 
 ```
 type RangeFile struct {
-fo    *os.File
-start int64
-end   int64
+    fo    *os.File
+    start int64
+    end   int64
 }
 
 func minInt64(a, b int64) int64 {
 if a < b {
-return a
+    return a
 }
-return b
+    return b
 }
 
 func NewRangeFile(fo *os.File, start, end int64) (*RangeFile, error) {
 rf := &RangeFile{
-fo:    fo,
-start: start,
-end:   end,
-}
-return rf, nil
+    fo:    fo,
+    start: start,
+    end:   end,
+    }
+    return rf, nil
 }
 
 func (rf *RangeFile) Read(buf []byte) (int, error) {
-var dataSize int64
-dataSize = minInt64(rf.end-rf.start+1, int64(len(buf)))
-if dataSize <= 0 {
-return 0, io.EOF
-}
-n, err := rf.fo.ReadAt(buf[:dataSize], rf.start)
-rf.start += dataSize
-return n, err
+    var dataSize int64
+    dataSize = minInt64(rf.end-rf.start+1, int64(len(buf)))
+    if dataSize <= 0 {
+        return 0, io.EOF
+    }
+    n, err := rf.fo.ReadAt(buf[:dataSize], rf.start)
+    rf.start += dataSize
+    return n, err
 }
 
 ```
@@ -106,5 +107,21 @@ if err != nil {
 }
 ```
 
+详细代码见https://github.com/yarenhere/daily_learn/blob/master/file-server/main.go
 
+```
+// 在启动目录先生成文件
+mkfile -n 101m test.file
+// 启动服务
+go run main.go ./
+另起一个shell
+// 请求0-10的 返回码206及部分内容
+wget -O /dev/null  http://127.0.0.1:13000/data/test.file --head "Range:bytes=0-10"
+// 请求超出文件大小，返回码416
+wget -O /dev/null  http://127.0.0.1:13000/data/test.file --head "Range:bytes=10000000000-100000009000"
+// 直接返回全部文件，返回码200
+wget -O /dev/null  http://127.0.0.1:13000/data/test.file
+```
 
+[1]: https://github.com/dragonflyoss/Dragonfly
+[2]: https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Range_requests
